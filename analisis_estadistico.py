@@ -120,23 +120,24 @@ def limpiar_nombre(producto):
 
 AZUCAR_PRODUCTOS = {
     "Gaseosa": 35,
-    "Jugo Hit": 28,
-    "Té": 15,
+    "Jugo en caja": 18,
+    "Té sin Azúcar": 0,
     "Agua": 0,
-    "Ponqué": 22,
-    "Galletas": 12,
+    "Ponqué": 24,
+    "Galletas": 16,
     "Barra de cereal": 8,
-    "Manzana": 0
+    "Manzana": 10
 }
 
 def calcular_azucar(df, umbral_saludable=15):
     df["Bebida"] = df["Bebida Elegida"].apply(limpiar_nombre)
     df["Snack"]  = df["Snack Elegido"].apply(limpiar_nombre)
 
-    df["AzucarBebida"] = df["Bebida"].map(AZUCAR_PRODUCTOS)
-    df["AzucarSnack"]  = df["Snack"].map(AZUCAR_PRODUCTOS)
+    df["AzucarBebida"] = df["Bebida"].map(AZUCAR_PRODUCTOS).fillna(0)
+    df["AzucarSnack"]  = df["Snack"].map(AZUCAR_PRODUCTOS).fillna(0)
 
     df["AzucarTotal"] = df["AzucarBebida"] + df["AzucarSnack"]
+
     df["Saludable"]   = (df["AzucarTotal"] <= umbral_saludable).astype(int)
 
     return df
@@ -180,7 +181,7 @@ def asignar_factores(df):
 # ================================================================
 
 def ic_media(x, alpha=0.05):
-    x = np.array(x)
+    x = pd.to_numeric(x, errors="coerce").dropna()
     n = len(x)
     media = x.mean()
     s = x.std(ddof=1)
@@ -188,11 +189,15 @@ def ic_media(x, alpha=0.05):
     margen = t_crit * s / np.sqrt(n)
     return media, media - margen, media + margen
 
+
 def ic_proporcion(p_hat, n, alpha=0.05):
+    if n == 0:
+        return np.nan, np.nan, np.nan
     z_crit = norm.ppf(1 - alpha/2)
     se = np.sqrt(p_hat * (1 - p_hat) / n)
     margen = z_crit * se
     return p_hat, p_hat - margen, p_hat + margen
+
 
 # ================================================================
 # 5. PRUEBA DE PROPORCIONES Y ANOVA FACTORIAL
@@ -215,59 +220,61 @@ def anova_factorial(df, factorA, factorB, y):
 
     # Sumas de cuadrados
     SSA = sum([
-        n * (df[df[factorA]==a][y].mean() - media_global)**2
+        n * (df[df[factorA] == a][y].mean() - media_global) ** 2
         for a in A
     ])
 
     SSB = sum([
-        n * (df[df[factorB]==b][y].mean() - media_global)**2
+        n * (df[df[factorB] == b][y].mean() - media_global) ** 2
         for b in B
     ])
 
     SSAB = 0
     for a in A:
         for b in B:
-            media_ab = df[(df[factorA]==a)&(df[factorB]==b)][y].mean()
-            media_a  = df[df[factorA]==a][y].mean()
-            media_b  = df[df[factorB]==b][y].mean()
-            SSAB += n*(media_ab - media_a - media_b + media_global)**2
+            media_ab = df[(df[factorA] == a) & (df[factorB] == b)][y].mean()
+            media_a = df[df[factorA] == a][y].mean()
+            media_b = df[df[factorB] == b][y].mean()
+            SSAB += n * (media_ab - media_a - media_b + media_global) ** 2
 
-    SSE = sum((df[y] - df.groupby([factorA,factorB])[y].transform("mean"))**2)
-    SST = SSA + SSB + SSAB + SSE
+    SSE = sum((df[y] - df.groupby([factorA, factorB])[y].transform("mean")) ** 2)
 
     # Grados de libertad
     a = len(A)
     b = len(B)
-    dfA  = a-1
-    dfB  = b-1
-    dfAB = dfA*dfB
-    dfE  = N - a*b
+    dfA = a - 1
+    dfB = b - 1
+    dfAB = dfA * dfB
+    dfE = N - (a * b)
 
     # Cuadrados medios
-    MSA  = SSA/dfA
-    MSB  = SSB/dfB
-    MSAB = SSAB/dfAB
-    MSE  = SSE/dfE
+    MSA = SSA / dfA
+    MSB = SSB / dfB
+    MSAB = SSAB / dfAB
+    MSE = SSE / dfE
 
     # Estadísticos F y p-values
-    FA  = MSA/MSE
-    FB  = MSB/MSE
-    FAB = MSAB/MSE
+    FA = MSA / MSE
+    FB = MSB / MSE
+    FAB = MSAB / MSE
 
-    pA  = 1 - f.cdf(FA, dfA, dfE)
-    pB  = 1 - f.cdf(FB, dfB, dfE)
+    pA = 1 - f.cdf(FA, dfA, dfE)
+    pB = 1 - f.cdf(FB, dfB, dfE)
     pAB = 1 - f.cdf(FAB, dfAB, dfE)
 
+    # Tabla ANOVA limpia (sin valores vacíos)
     tabla = pd.DataFrame({
-        "Fuente": ["Etiqueta (A)", "Precio (B)", "Interacción AB", "Error", "Total"],
-        "SS": [SSA, SSB, SSAB, SSE, SST],
-        "df": [dfA, dfB, dfAB, dfE, N-1],
-        "MS": [MSA, MSB, MSAB, MSE, ""],
-        "F": [FA, FB, FAB, "", ""],
-        "p-value": [pA, pB, pAB, "", ""]
+        "Fuente": ["Etiqueta (A)", "Precio (B)", "Interacción AB", "Error"],
+        "SS": [SSA, SSB, SSAB, SSE],
+        "df": [dfA, dfB, dfAB, dfE],
+        "MS": [MSA, MSB, MSAB, MSE],
+        "F": [FA, FB, FAB, None],
+        "p-value": [pA, pB, pAB, None]
     })
 
     return tabla, (FA, FB, FAB, dfA, dfB, dfAB, dfE)
+
+
 
 # ================================================================
 # 6. GRÁFICOS (MEJORADOS + INTERPRETACIÓN AUTOMÁTICA)
